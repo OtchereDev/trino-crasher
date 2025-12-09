@@ -41,8 +41,14 @@ func main() {
 	cfg := config.DefaultConfig()
 
 	// Override with environment variables if provided
-	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
-		cfg.PostgresDSN = dsn
+	if dsn := os.Getenv("KETO_DSN"); dsn != "" {
+		cfg.KetoDSN = dsn
+	}
+	if dsn := os.Getenv("AUTH_DB_DSN"); dsn != "" {
+		cfg.AuthDBDSN = dsn
+	}
+	if dsn := os.Getenv("ASSET_DB_DSN"); dsn != "" {
+		cfg.AssetDBDSN = dsn
 	}
 	if dsn := os.Getenv("MONGO_DSN"); dsn != "" {
 		cfg.MongoDSN = dsn

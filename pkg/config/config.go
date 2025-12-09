@@ -4,8 +4,10 @@ import "time"
 
 // StoreConfig holds configuration for the in-memory store
 type StoreConfig struct {
-	// PostgreSQL connection string
-	PostgresDSN string
+	// PostgreSQL connection strings (multiple databases)
+	KetoDSN    string // Keto permissions database (keto_relation_tuples)
+	AuthDBDSN  string // Auth database (group_relations)
+	AssetDBDSN string // Asset database (devices)
 
 	// MongoDB connection string
 	MongoDSN string

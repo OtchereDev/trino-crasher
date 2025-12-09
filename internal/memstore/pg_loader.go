@@ -45,7 +45,8 @@ type DeviceInfo struct {
 }
 
 // LoadPostgresData loads all necessary data from PostgreSQL databases
-func LoadPostgresData(ctx context.Context, pool *pgxpool.Pool, logger logger.Logger) (*PostgresData, error) {
+// Takes three separate connection pools for Keto, Auth-DB, and Asset-DB
+func LoadPostgresData(ctx context.Context, ketoPool, authPool, assetPool *pgxpool.Pool, logger logger.Logger) (*PostgresData, error) {
 	data := &PostgresData{
 		UserProfiles:        make(map[string]string),
 		UserGroups:          make(map[string][]string),
@@ -55,44 +56,44 @@ func LoadPostgresData(ctx context.Context, pool *pgxpool.Pool, logger logger.Log
 		Devices:             make(map[string]DeviceInfo),
 	}
 
-	// Load user profiles
-	logger.Debug("Loading user profiles from PostgreSQL...")
-	if err := loadUserProfiles(ctx, pool, data); err != nil {
+	// Load user profiles from Keto DB
+	logger.Debug("Loading user profiles from Keto database...")
+	if err := loadUserProfiles(ctx, ketoPool, data); err != nil {
 		return nil, fmt.Errorf("failed to load user profiles: %w", err)
 	}
 	logger.Debug(fmt.Sprintf("Loaded %d user profiles", len(data.UserProfiles)))
 
-	// Load user groups
-	logger.Debug("Loading user groups from PostgreSQL...")
-	if err := loadUserGroups(ctx, pool, data); err != nil {
+	// Load user groups from Keto DB
+	logger.Debug("Loading user groups from Keto database...")
+	if err := loadUserGroups(ctx, ketoPool, data); err != nil {
 		return nil, fmt.Errorf("failed to load user groups: %w", err)
 	}
 	logger.Debug(fmt.Sprintf("Loaded user groups for %d users", len(data.UserGroups)))
 
-	// Load group members
-	logger.Debug("Loading group members from PostgreSQL...")
-	if err := loadGroupMembers(ctx, pool, data); err != nil {
+	// Load group members from Auth DB
+	logger.Debug("Loading group members from Auth database...")
+	if err := loadGroupMembers(ctx, authPool, data); err != nil {
 		return nil, fmt.Errorf("failed to load group members: %w", err)
 	}
 	logger.Debug(fmt.Sprintf("Loaded members for %d groups", len(data.GroupMembers)))
 
-	// Load device links
-	logger.Debug("Loading device links from PostgreSQL...")
-	if err := loadDeviceLinks(ctx, pool, data); err != nil {
+	// Load device links from Keto DB
+	logger.Debug("Loading device links from Keto database...")
+	if err := loadDeviceLinks(ctx, ketoPool, data); err != nil {
 		return nil, fmt.Errorf("failed to load device links: %w", err)
 	}
 	logger.Debug(fmt.Sprintf("Loaded %d device links", len(data.DeviceLinks)))
 
-	// Load identity assignments
-	logger.Debug("Loading identity assignments from PostgreSQL...")
-	if err := loadIdentityAssignments(ctx, pool, data); err != nil {
+	// Load identity assignments from Keto DB
+	logger.Debug("Loading identity assignments from Keto database...")
+	if err := loadIdentityAssignments(ctx, ketoPool, data); err != nil {
 		return nil, fmt.Errorf("failed to load identity assignments: %w", err)
 	}
 	logger.Debug(fmt.Sprintf("Loaded %d identity assignments", len(data.IdentityAssignments)))
 
-	// Load devices from asset-db
-	logger.Debug("Loading devices from asset-db...")
-	if err := loadDevices(ctx, pool, data); err != nil {
+	// Load devices from Asset DB
+	logger.Debug("Loading devices from Asset database...")
+	if err := loadDevices(ctx, assetPool, data); err != nil {
 		logger.Warn(fmt.Sprintf("Failed to load devices (may not exist yet): %v", err))
 		// Don't fail if devices don't exist yet
 	} else {
@@ -102,11 +103,11 @@ func LoadPostgresData(ctx context.Context, pool *pgxpool.Pool, logger logger.Log
 	return data, nil
 }
 
-// loadUserProfiles loads user_id -> user_email mappings
+// loadUserProfiles loads user_id -> user_email mappings from Keto DB
 func loadUserProfiles(ctx context.Context, pool *pgxpool.Pool, data *PostgresData) error {
 	query := `
 		SELECT subject, object
-		FROM postgresql.public.keto_0000000000_relation_tuples
+		FROM public.keto_0000000000_relation_tuples
 		WHERE relation = 'user_profile'
 	`
 
@@ -127,11 +128,11 @@ func loadUserProfiles(ctx context.Context, pool *pgxpool.Pool, data *PostgresDat
 	return rows.Err()
 }
 
-// loadUserGroups loads user_email -> []group_id mappings
+// loadUserGroups loads user_email -> []group_id mappings from Keto DB
 func loadUserGroups(ctx context.Context, pool *pgxpool.Pool, data *PostgresData) error {
 	query := `
 		SELECT subject, object
-		FROM postgresql.public.keto_0000000000_relation_tuples
+		FROM public.keto_0000000000_relation_tuples
 		WHERE relation = 'member'
 	`
 
@@ -156,11 +157,11 @@ func loadUserGroups(ctx context.Context, pool *pgxpool.Pool, data *PostgresData)
 	return rows.Err()
 }
 
-// loadGroupMembers loads group_id -> []member mappings
+// loadGroupMembers loads group_id -> []member mappings from Auth DB
 func loadGroupMembers(ctx context.Context, pool *pgxpool.Pool, data *PostgresData) error {
 	query := `
 		SELECT group_id, member_id, type
-		FROM "auth-db".public.group_relations
+		FROM public.group_relations
 		WHERE type IN ('identities', 'things')
 	`
 
@@ -185,11 +186,11 @@ func loadGroupMembers(ctx context.Context, pool *pgxpool.Pool, data *PostgresDat
 	return rows.Err()
 }
 
-// loadDeviceLinks loads device_id -> dfx_device mappings
+// loadDeviceLinks loads device_id -> dfx_device mappings from Keto DB
 func loadDeviceLinks(ctx context.Context, pool *pgxpool.Pool, data *PostgresData) error {
 	query := `
 		SELECT subject, object
-		FROM postgresql.public.keto_0000000000_relation_tuples
+		FROM public.keto_0000000000_relation_tuples
 		WHERE relation = 'idLink'
 	`
 
@@ -210,11 +211,11 @@ func loadDeviceLinks(ctx context.Context, pool *pgxpool.Pool, data *PostgresData
 	return rows.Err()
 }
 
-// loadIdentityAssignments loads device_id -> identity_id mappings
+// loadIdentityAssignments loads device_id -> identity_id mappings from Keto DB
 func loadIdentityAssignments(ctx context.Context, pool *pgxpool.Pool, data *PostgresData) error {
 	query := `
 		SELECT subject, object
-		FROM postgresql.public.keto_0000000000_relation_tuples
+		FROM public.keto_0000000000_relation_tuples
 		WHERE relation = 'assignedDevice'
 	`
 
@@ -235,11 +236,11 @@ func loadIdentityAssignments(ctx context.Context, pool *pgxpool.Pool, data *Post
 	return rows.Err()
 }
 
-// loadDevices loads device information from asset-db
+// loadDevices loads device information from Asset DB
 func loadDevices(ctx context.Context, pool *pgxpool.Pool, data *PostgresData) error {
 	query := `
 		SELECT id, asset_id, identity_id, name, last_seen
-		FROM "asset-db".public.devices
+		FROM public.devices
 	`
 
 	rows, err := pool.Query(ctx, query)

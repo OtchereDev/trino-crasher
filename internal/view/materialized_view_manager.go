@@ -20,9 +20,11 @@ type MaterializedViewManager struct {
 	logger logger.Logger
 	config *config.StoreConfig
 
-	// Database connections
-	pgPool      *pgxpool.Pool
-	mongoClient *mongo.Client
+	// Database connections (3 PostgreSQL databases + 1 MongoDB)
+	ketoPool    *pgxpool.Pool // Keto permissions database
+	authPool    *pgxpool.Pool // Auth database
+	assetPool   *pgxpool.Pool // Asset database
+	mongoClient *mongo.Client // MongoDB
 
 	// Blue-Green stores for identities
 	identityStoreBlue  atomic.Pointer[memstore.IdentityStore]
@@ -46,26 +48,51 @@ func NewMaterializedViewManager(cfg *config.StoreConfig, logger logger.Logger) (
 		config: cfg,
 	}
 
-	// Initialize PostgreSQL connection pool
-	logger.Debug("Connecting to PostgreSQL...")
-	pgPool, err := pgxpool.New(context.Background(), cfg.PostgresDSN)
+	// Initialize Keto PostgreSQL connection pool
+	logger.Debug("Connecting to Keto database...")
+	ketoPool, err := pgxpool.New(context.Background(), cfg.KetoDSN)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+		return nil, fmt.Errorf("failed to connect to Keto database: %w", err)
 	}
-	mvm.pgPool = pgPool
-	logger.Debug("✓ Connected to PostgreSQL")
+	mvm.ketoPool = ketoPool
+	logger.Debug("✓ Connected to Keto database")
+
+	// Initialize Auth PostgreSQL connection pool
+	logger.Debug("Connecting to Auth database...")
+	authPool, err := pgxpool.New(context.Background(), cfg.AuthDBDSN)
+	if err != nil {
+		ketoPool.Close()
+		return nil, fmt.Errorf("failed to connect to Auth database: %w", err)
+	}
+	mvm.authPool = authPool
+	logger.Debug("✓ Connected to Auth database")
+
+	// Initialize Asset PostgreSQL connection pool
+	logger.Debug("Connecting to Asset database...")
+	assetPool, err := pgxpool.New(context.Background(), cfg.AssetDBDSN)
+	if err != nil {
+		ketoPool.Close()
+		authPool.Close()
+		return nil, fmt.Errorf("failed to connect to Asset database: %w", err)
+	}
+	mvm.assetPool = assetPool
+	logger.Debug("✓ Connected to Asset database")
 
 	// Initialize MongoDB connection
 	logger.Debug("Connecting to MongoDB...")
 	mongoClient, err := mongo.Connect(context.Background(), options.Client().ApplyURI(cfg.MongoDSN))
 	if err != nil {
-		pgPool.Close()
+		ketoPool.Close()
+		authPool.Close()
+		assetPool.Close()
 		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
 
 	// Ping MongoDB to verify connection
 	if err := mongoClient.Ping(context.Background(), nil); err != nil {
-		pgPool.Close()
+		ketoPool.Close()
+		authPool.Close()
+		assetPool.Close()
 		mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
 	}
@@ -83,8 +110,16 @@ func NewMaterializedViewManager(cfg *config.StoreConfig, logger logger.Logger) (
 func (mvm *MaterializedViewManager) Close() error {
 	mvm.logger.Debug("Closing database connections...")
 
-	if mvm.pgPool != nil {
-		mvm.pgPool.Close()
+	if mvm.ketoPool != nil {
+		mvm.ketoPool.Close()
+	}
+
+	if mvm.authPool != nil {
+		mvm.authPool.Close()
+	}
+
+	if mvm.assetPool != nil {
+		mvm.assetPool.Close()
 	}
 
 	if mvm.mongoClient != nil {
@@ -108,9 +143,9 @@ func (mvm *MaterializedViewManager) InitializeTables(ctx context.Context) error 
 		hasIdentities = false
 	}
 
-	// Load PostgreSQL data
-	mvm.logger.Debug("Loading data from PostgreSQL...")
-	pgData, err := memstore.LoadPostgresData(ctx, mvm.pgPool, mvm.logger)
+	// Load PostgreSQL data from all three databases
+	mvm.logger.Debug("Loading data from PostgreSQL databases...")
+	pgData, err := memstore.LoadPostgresData(ctx, mvm.ketoPool, mvm.authPool, mvm.assetPool, mvm.logger)
 	if err != nil {
 		return fmt.Errorf("failed to load PostgreSQL data: %w", err)
 	}
@@ -168,9 +203,9 @@ func (mvm *MaterializedViewManager) RefreshIdentityStore(ctx context.Context) er
 		return nil
 	}
 
-	// Load fresh data
-	mvm.logger.Debug("Loading fresh data from PostgreSQL...")
-	pgData, err := memstore.LoadPostgresData(ctx, mvm.pgPool, mvm.logger)
+	// Load fresh data from all three PostgreSQL databases
+	mvm.logger.Debug("Loading fresh data from PostgreSQL databases...")
+	pgData, err := memstore.LoadPostgresData(ctx, mvm.ketoPool, mvm.authPool, mvm.assetPool, mvm.logger)
 	if err != nil {
 		return fmt.Errorf("failed to load PostgreSQL data: %w", err)
 	}
@@ -213,9 +248,9 @@ func (mvm *MaterializedViewManager) RefreshDeviceStore(ctx context.Context) erro
 	start := time.Now()
 	mvm.logger.Debug("Starting device store refresh...")
 
-	// Load fresh data
-	mvm.logger.Debug("Loading fresh data from PostgreSQL...")
-	pgData, err := memstore.LoadPostgresData(ctx, mvm.pgPool, mvm.logger)
+	// Load fresh data from all three PostgreSQL databases
+	mvm.logger.Debug("Loading fresh data from PostgreSQL databases...")
+	pgData, err := memstore.LoadPostgresData(ctx, mvm.ketoPool, mvm.authPool, mvm.assetPool, mvm.logger)
 	if err != nil {
 		return fmt.Errorf("failed to load PostgreSQL data: %w", err)
 	}
